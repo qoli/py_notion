@@ -78,9 +78,10 @@ class NotionPageReader:
             
         elif block_type == 'table':
             if block['content']:
-                md.append(f"{indent}\n表格：")
-                for row_id in block['content']:
-                    md.append(f"{indent}- {row_id}")
+                if debug:
+                    md.append(f"{indent}\n表格：")
+                    for row_id in block['content']:
+                        md.append(f"{indent}- {row_id}")
                 has_content = True
                     
         elif block_type == 'table_row':
@@ -109,6 +110,7 @@ class NotionPageReader:
             md.append(f"最後編輯時間: {block['last_edited_time']}")
             md.append(f"創建者: {block['created_by_name']}")
             md.append(f"父塊ID: {block['parent_id']}")
+            md.append(f"存活狀態: {block['alive']}")
             if block['properties']:
                 md.append("屬性:")
                 md.append(json.dumps(block['properties'], ensure_ascii=False, indent=2))
@@ -166,7 +168,8 @@ class NotionPageReader:
                         name AS created_by_name,
                         last_edited_time,
                         last_edited_by_id,
-                        1 as level
+                        1 as level,
+                        block.alive
                     FROM block
                     INNER JOIN notion_user ON notion_user.id = block.created_by_id
                     WHERE block.parent_id = ?
@@ -185,7 +188,8 @@ class NotionPageReader:
                         u.name,
                         b.last_edited_time,
                         b.last_edited_by_id,
-                        h.level + 1
+                        h.level + 1,
+                        b.alive
                     FROM block b
                     INNER JOIN block_hierarchy h ON h.id = b.parent_id
                     INNER JOIN notion_user u ON u.id = b.created_by_id
@@ -245,9 +249,10 @@ def main():
     print(f"# 頁面內容 - {args.page_id}\n")
 
     for block in blocks:
-        # 僅在非debug模式下，過濾掉 level > 1 的 blocks
-        if not args.debug and block['level'] > 1:
-            continue
+        # 僅在非debug模式下，過濾掉 level > 1 或 alive != 1 的 blocks
+        if not args.debug:
+            if block['level'] > 1 or block['alive'] != 1:
+                continue
         
         markdown = reader._convert_to_markdown(block, blocks, debug=args.debug)
         if markdown:
