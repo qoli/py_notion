@@ -6,22 +6,22 @@ import argparse
 
 class NotionPageReader:
     def _convert_to_markdown(self, block, blocks, debug=False, level=0):
-        """將Notion塊轉換為Markdown格式
+        """Convert Notion blocks to Markdown format
 
         Args:
-            block (dict): Notion塊數據
-            blocks (list): 所有塊的列表
-            debug (bool): 是否啟用調試模式
-            level (int): 當前塊的層級（從0開始）
+            block (dict): Notion block data
+            blocks (list): List of all blocks
+            debug (bool): Enable debug mode
+            level (int): Current block level (starts from 0)
 
         Returns:
-            str: Markdown格式的文本
+            str: Markdown formatted text
         """
         block_type = block['type']
         md = []
         has_content = False
 
-        # 添加縮進
+        # Add indentation
         indent = "  " * level
 
         def parse_rich_text(rich_text):
@@ -44,7 +44,7 @@ class NotionPageReader:
                         text += format_text
             return text
 
-        # 根據塊類型轉換
+        # Convert based on block type
         if block['properties'] and 'title' in block['properties']:
             text = parse_rich_text(block['properties']['title'])
             if text.strip():
@@ -68,7 +68,7 @@ class NotionPageReader:
                     md.append(f"{indent}💡 {text}")
                 elif block_type == 'code':
                     md.append(f"{indent}```\n{text}\n{indent}```")
-                else:  # paragraph 或其他文本類型
+                else:  # paragraph or other text types
                     md.append(f"{indent}{text}")
                 has_content = True
 
@@ -79,7 +79,7 @@ class NotionPageReader:
         elif block_type == 'table':
             if block['content']:
                 if debug:
-                    md.append(f"{indent}\n表格：")
+                    md.append(f"{indent}\nTable:")
                     for row_id in block['content']:
                         md.append(f"{indent}- {row_id}")
                 has_content = True
@@ -101,25 +101,25 @@ class NotionPageReader:
             md.append(f"{indent}![{title}]({source})")
             has_content = True
 
-        # 在調試模式下添加元數據
+        # Add metadata in debug mode
         if debug:
-            md.append("\n=== 元數據 ===")
-            md.append(f"類型: {block_type}")
+            md.append("\n=== Metadata ===")
+            md.append(f"Type: {block_type}")
             md.append(f"ID: {block['id']}")
-            md.append(f"創建時間: {block['created_time']}")
-            md.append(f"最後編輯時間: {block['last_edited_time']}")
-            md.append(f"創建者: {block['created_by_name']}")
-            md.append(f"父塊ID: {block['parent_id']}")
-            md.append(f"存活狀態: {block['alive']}")
+            md.append(f"Created: {block['created_time']}")
+            md.append(f"Last Edited: {block['last_edited_time']}")
+            md.append(f"Creator: {block['created_by_name']}")
+            md.append(f"Parent ID: {block['parent_id']}")
+            md.append(f"Alive: {block['alive']}")
             if block['properties']:
-                md.append("屬性:")
+                md.append("Properties:")
                 md.append(json.dumps(block['properties'], ensure_ascii=False, indent=2))
             if block['content']:
-                md.append("內容:")
+                md.append("Content:")
                 md.append(json.dumps(block['content'], ensure_ascii=False, indent=2))
 
-        # 遞迴處理子塊
-        if block['content']:
+        # Process child blocks if not page type
+        if block['content'] and block_type != 'page':
             for child_id in block['content']:
                 child_block = next((b for b in blocks if b['id'] == child_id), None)
                 if child_block:
@@ -127,36 +127,65 @@ class NotionPageReader:
                     if child_md:
                         md.append(child_md)
 
-        # 在調試模式下，始終返回內容，否則只在有內容時返回
+        # Always return content in debug mode, otherwise only if has_content
         return "\n".join(md) if (debug or has_content) else None
     
     def __init__(self, db_path):
         if not os.path.exists(db_path):
-            raise FileNotFoundError(f"找不到數據庫文件：{db_path}")
+            raise FileNotFoundError(f"Database file not found: {db_path}")
         self.db_path = db_path
 
     def connect(self):
         try:
             return sqlite3.connect(self.db_path)
         except sqlite3.Error as e:
-            raise Exception(f"連接Notion數據庫時發生錯誤：{e}")
+            raise Exception(f"Error connecting to Notion database: {e}")
             
     def get_page_blocks(self, page_id):
-        """
-        獲取指定頁面ID的所有塊。
+        """Get all blocks for the specified page ID. If page type, only return direct children.
 
         Args:
-            page_id (str): 要獲取的頁面ID。
+            page_id (str): The page ID to get blocks for.
 
         Returns:
-            list: 包含頁面所有塊的列表。
+            list: List containing all page blocks.
         """
         try:
-            conn = self.connect()  # 確保這裡調用了self.connect()
+            conn = self.connect()
             cursor = conn.cursor()
-            query = """
+            
+            # Check page type
+            cursor.execute("SELECT type FROM block WHERE id = ?", (page_id,))
+            page_type = cursor.fetchone()
+            
+            if not page_type:
+                return []
+                
+            if page_type[0] == 'page':
+                # For page type, only get direct children
+                query = """
+                SELECT 
+                    block.id,
+                    block.parent_id,
+                    block.type,
+                    block.properties,
+                    block.content,
+                    created_time,
+                    created_by_id,
+                    name AS created_by_name,
+                    last_edited_time,
+                    last_edited_by_id,
+                    1 as level,
+                    block.alive
+                FROM block
+                INNER JOIN notion_user ON notion_user.id = block.created_by_id
+                WHERE block.parent_id = ?
+                """
+            else:
+                # For other types, use recursive query
+                query = """
                 WITH RECURSIVE block_hierarchy AS (
-                    -- 基礎查詢：獲取直接子塊
+                    -- Base query: get direct children
                     SELECT
                         block.id,
                         block.parent_id,
@@ -176,7 +205,7 @@ class NotionPageReader:
 
                     UNION ALL
 
-                    -- 遞歸部分：獲取子塊的子塊
+                    -- Recursive part: get children of children
                     SELECT
                         b.id,
                         b.parent_id,
@@ -205,20 +234,20 @@ class NotionPageReader:
             for row in cursor.fetchall():
                 block = dict(zip(columns, row))
 
-                # 轉換時間戳記（如果存在）
+                # Convert timestamps if they exist
                 if block['created_time']:
                     block['created_time'] = datetime.fromtimestamp(block['created_time'] / 1000)
                 if block['last_edited_time']:
                     block['last_edited_time'] = datetime.fromtimestamp(block['last_edited_time'] / 1000)
 
-                # 解析 properties（如果存在）
+                # Parse properties if they exist
                 if block['properties']:
                     try:
                         block['properties'] = json.loads(block['properties'])
                     except json.JSONDecodeError:
                         block['properties'] = None
 
-                # 解析 content（如果存在）
+                # Parse content if it exists
                 if block['content']:
                     try:
                         block['content'] = json.loads(block['content'])
@@ -227,29 +256,28 @@ class NotionPageReader:
 
                 blocks.append(block)
             
-            # 在此直接 return blocks
             return blocks
 
         except sqlite3.Error as e:
-            print(f"Error querying database: {e}")
+            print(f"Database query error: {e}")
         finally:
             if conn:
                 conn.close()
 
 def main():
-    parser = argparse.ArgumentParser(description='讀取Notion頁面的所有塊')
-    parser.add_argument('page_id', help='Notion頁面ID')
-    parser.add_argument('--debug', action='store_true', help='啟用調試模式，顯示詳細信息')
+    parser = argparse.ArgumentParser(description='Read all blocks from a Notion page')
+    parser.add_argument('page_id', help='Notion page ID')
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode to show detailed info')
     args = parser.parse_args()
 
     db_path = os.path.expanduser("~/Library/Application Support/Notion/notion.db")
     reader = NotionPageReader(db_path)
     blocks = reader.get_page_blocks(args.page_id)
     
-    print(f"# 頁面內容 - {args.page_id}\n")
+    print(f"# Page Content - {args.page_id}\n")
 
     for block in blocks:
-        # 僅在非debug模式下，過濾掉 level > 1 或 alive != 1 的 blocks
+        # In non-debug mode, filter out blocks with level > 1 or alive != 1
         if not args.debug:
             if block['level'] > 1 or block['alive'] != 1:
                 continue
